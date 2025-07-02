@@ -16,7 +16,7 @@ import thetis.optimisation  # NOQA
 import thetis.diagnostics  # NOQA
 from thetis._version import get_versions
 from thetis.assembledschur import AssembledSchurPC  # NOQA
-from thetis.options import TidalTurbineFarmOptions, DiscreteTidalTurbineFarmOptions  # NOQA
+from thetis.options import TidalTurbineFarmOptions  # NOQA
 import os  # NOQA
 import datetime  # NOQA
 import numpy  # NOQA
@@ -26,6 +26,3 @@ del get_versions
 
 thetis_log_level(DEBUG)
 set_thetis_loggers(comm=COMM_WORLD)
-
-from . import _version
-__version__ = _version.get_versions()['version']

@@ -5,7 +5,6 @@ All options are type-checked and they are stored in traitlets Configurable
 objects.
 """
 from .configuration import *
-from traitlets import Integer, Float, TraitType, Dict, Enum, Unicode, Bool, Instance, List, Type
 from firedrake import Constant
 from .sediment_model import SedimentModel
 from collections import OrderedDict
@@ -64,7 +63,6 @@ class SteadyStateTimeStepperOptions2d(TimeStepperOptions):
     solver_parameters = PETScSolverParameters({
         'ksp_type': 'preonly',
         'pc_type': 'lu',
-        'pc_factor_mat_solver_type': 'mumps',
         'mat_type': 'aij'
     }).tag(config=True)
 
@@ -459,68 +457,20 @@ class LinearEquationOfStateOptions(EquationOfStateOptions):
 
 class TidalTurbineOptions(FrozenHasTraits):
     """Tidal turbine parameters"""
-    name = 'Tidal turbine options'
-    diameter = PositiveFloat(
-        18., help='Turbine diameter').tag(config=True)
-    projected_diameter = PositiveFloat(
-        None, allow_none=True, help='Extent over which turbine drag is applied'
-                                    '(defaults to diameter if not provided)').tag(config=True)
-    C_support = NonNegativeFloat(
-        0., help='Thrust coefficient for support structure').tag(config=True)
-    A_support = NonNegativeFloat(
-        0., help='Cross section of support structure').tag(config=True)
-
-
-class ConstantTidalTurbineOptions(TidalTurbineOptions):
-    """Options for tidal turbine with constant thrust"""
-    name = 'Constant tidal turbine options'
     thrust_coefficient = PositiveFloat(
         0.8, help='Thrust coefficient C_T').tag(config=True)
-    power_coefficient = PositiveFloat(
-        None, allow_none=True, help='Power coefficient C_P, defaults to None and will be calculated using '
-                                    'an empirical formula based on thrust coefficients unless specified (see '
-                                    'ConstantThrustTurbine).').tag(config=True)
+    diameter = PositiveFloat(
+        18., help='Turbine diameter').tag(config=True)
 
 
-class TabulatedTidalTurbineOptions(TidalTurbineOptions):
-    """Options for tidal turbine with tabulated thrust coefficient"""
-    name = 'Tabulated tidal turbine options'
-    thrust_speeds = List(
-        [0.9, 1., 3., 5., 5.001],
-        help='List of speeds at which thrust_coefficients are applied.'
-        'First and last entry function as cut-in and cut-out speeds respectively')
-    thrust_coefficients = List([0.01, 0.7, 0.7, 0.1, 0.0001], help='Table of thrust coefficients')
-    power_coefficients = List(
-        None, allow_none=True, help='Table of power coefficients. Defaults to None and will be calculated '
-                                    'using an empirical formula based on thrust coefficients unless specified (see '
-                                    'TabulatedThrustTurbine).').tag(config=True)
-
-
-@attach_paired_options("turbine_type",
-                       PairedEnum([('constant', ConstantTidalTurbineOptions),
-                                   ('table', TabulatedTidalTurbineOptions),
-                                   ],
-                                  "turbine_options",
-                                  default_value='constant',
-                                  help='Type of turbine thrust specification').tag(config=True),
-                       Instance(TidalTurbineOptions, args=()).tag(config=True))
 class TidalTurbineFarmOptions(FrozenHasTraits, TraitType):
     """Tidal turbine farm options"""
     name = 'Farm options'
+    turbine_options = TidalTurbineOptions()
     turbine_density = FiredrakeScalarExpression(
         Constant(0.0), help='Density of turbines within the farm')
     break_even_wattage = NonNegativeFloat(
         0.0, help='Average power production per turbine required to break even')
-
-
-class DiscreteTidalTurbineFarmOptions(TidalTurbineFarmOptions):
-    """Discrete Tidal turbine farm options - defaults to 0 turbines in the field"""
-    name = 'Discrete Farm options'
-    turbine_coordinates = List(default_value=[], help="Coordinates for turbines").tag(config=True)
-    upwind_correction = Bool(True,
-                             help='bool: Apply flow correction to correct for upwind velocity').tag(config=True)
-    quadrature_degree = PositiveInteger(10,
-                                        help='Quadrature degree for thrust force and power output integral').tag(config=True)
 
 
 class TracerFieldOptions(FrozenHasTraits):
@@ -892,14 +842,8 @@ class ModelOptions2d(CommonModelOptions):
 
         Note this is only relevant if `use_automatic_wetting_and_drying_alpha` is set to ``True``.
         """).tag(config=True)
-    tidal_turbine_farms = Dict(trait=List(TidalTurbineFarmOptions()), default_value={},
-                               help='Dictionary mapping subdomain ids to a list of TidalTurbineFarmOptions instances '
-                                    'corresponding to one or more farms.')
-
-    discrete_tidal_turbine_farms = Dict(trait=List(DiscreteTidalTurbineFarmOptions()), default_value={},
-                                        help='Dictionary mapping subdomain ids to a list of DiscreteTidalTurbineFarmOptions '
-                                             'instances corresponding to one or more farms.')
-
+    tidal_turbine_farms = Dict(trait=TidalTurbineFarmOptions(),
+                               default_value={}, help='Dictionary mapping subdomain ids to the options of the corresponding farm')
     check_tracer_conservation = Bool(
         False, help="""
         Compute total tracer mass at every export
@@ -934,6 +878,16 @@ class ModelOptions2d(CommonModelOptions):
         False, help="Use SUPG stabilisation in tracer advection").tag(config=True)
     tracer_picard_iterations = PositiveInteger(
         1, help="Number of Picard iterations taken for tracer equations.").tag(config=True)
+    wave_curr_inter = Bool(
+        False, help="Enable wave-current interaction").tag(config=True)
+    use_swan = Bool(
+        False, help="Use SWAN's gradient of radiation stress").tag(config=True)
+    use_mellor =  Bool(
+        False, help="Use Mellor's formulation for radiation stress").tag(config=True)
+    use_roller = Bool(
+        False, help="Add Roller effects").tag(config=True)
+    use_monochromatic = Bool(
+        False, help="Wave conditions are monochromatic").tag(config=True)
 
     def __init__(self, *args, **kwargs):
         self.tracer = OrderedDict()
@@ -1004,7 +958,7 @@ class ModelOptions2d(CommonModelOptions):
             kwargs[label]['mixed'] = True
         self.tracer_fields[','.join(labels)] = function
         if function is not None:
-            for label, child in zip(labels, function.subfunctions):
+            for label, child in zip(labels, function.split()):
                 kwargs[label]['function'] = child
         for label, name, filename, shortname, unit in zip(labels, names, filenames, shortnames, units):
             self.add_tracer_2d(label, name, filename, shortname=shortname, unit=unit, **kwargs[label])

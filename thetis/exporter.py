@@ -2,7 +2,7 @@
 Routines for handling file exports.
 """
 from .utility import *
-from firedrake.output.vtk_output import is_cg, VTKFile
+from firedrake.output import is_cg
 from collections import OrderedDict
 import itertools
 
@@ -22,11 +22,11 @@ def get_visu_space(fs):
     """
     mesh = fs.mesh()
     family = 'Lagrange' if is_cg(fs) else 'Discontinuous Lagrange'
-    if len(fs.value_shape) == 1:
-        dim = fs.value_shape[0]
+    if len(fs.ufl_element().value_shape()) == 1:
+        dim = fs.ufl_element().value_shape()[0]
         visu_fs = get_functionspace(mesh, family, 1, family, 1,
                                     vector=True, dim=dim)
-    elif len(fs.value_shape) == 2:
+    elif len(fs.ufl_element().value_shape()) == 2:
         visu_fs = get_functionspace(mesh, family, 1, family, 1,
                                     tensor=True)
     else:
@@ -91,7 +91,7 @@ class VTKExporter(ExporterBase):
         if (len(filename) < len(suffix)+1 or filename[:len(suffix)] != suffix):
             self.filename += suffix
         path = os.path.join(path, self.filename)
-        self.outfile = VTKFile(path)
+        self.outfile = File(path)
         self.cast_operators = {}
 
     def set_next_export_ix(self, next_export_ix):
@@ -170,7 +170,7 @@ class HDF5Exporter(ExporterBase):
         :arg int iexport: export index >= 0
         :arg function: :class:`Function` to export
         """
-        assert function.function_space() == self.function_space, \
+        assert function.function_space() == self.function_space,\
             'Function space does not match'
         filename = self.gen_filename(iexport)
         if self.verbose:
@@ -204,7 +204,7 @@ class HDF5Exporter(ExporterBase):
         :arg int iexport: export index >= 0
         :arg function: target :class:`Function`
         """
-        assert function.function_space() == self.function_space, \
+        assert function.function_space() == self.function_space,\
             'Function space does not match'
         filename = self.gen_filename(iexport)
         if self.verbose:
@@ -214,9 +214,12 @@ class HDF5Exporter(ExporterBase):
                 f.load(function)
         else:
             with CheckpointFile(filename, 'r') as f:
-                mesh = function.function_space().mesh()
-                if not hasattr(mesh, 'sfXC'):
-                    raise IOError('When loading fields from hdf5 checkpoint files, you should also read the mesh from checkpoint. See the documentation for `read_mesh_from_checkpoint()`')
+                if not f._get_mesh_name_topology_name_map():
+                    raise IOError(f'File "{filename}" does not contain mesh topology, try loading it with the legacy DumbCheckpoint option?')
+                mesh_name = function.function_space().mesh().name
+                if mesh_name is None:
+                    mesh_name = 'firedrake_default'
+                mesh = f.load_mesh(mesh_name)
                 g = f.load_function(mesh, function.name())
                 function.assign(g)
 
@@ -351,6 +354,6 @@ class ExportManager(object):
 
         :arg bathymetry_2d: 2D bathymetry :class:`Function`
         """
-        bathfile = VTKFile(os.path.join(self.outputdir, 'init_bathymetry_2d/init_bathymetry_2d.pvd'))
+        bathfile = File(os.path.join(self.outputdir, 'init_bathymetry_2d/init_bathymetry_2d.pvd'))
 
         bathfile.write(bathymetry_2d)

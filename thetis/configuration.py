@@ -2,15 +2,14 @@
 Utility function and extensions to traitlets used for specifying Thetis options
 """
 import textwrap
-import traitlets
 from textwrap import dedent
 from traitlets.config.configurable import Configurable
+from traitlets import *
 from firedrake import Constant, Function
 import datetime
 import ufl
 
 from abc import ABCMeta, abstractproperty
-
 
 def indent(s, nspaces):
     return textwrap.indent(s, ' ' * nspaces)
@@ -72,7 +71,7 @@ def rst_all_options(cls, nspace=0, prefix=None):
     return "\n".join(lines)
 
 
-class PositiveInteger(traitlets.Integer):
+class PositiveInteger(Integer):
     def info(self):
         return u'a positive integer'
 
@@ -82,7 +81,7 @@ class PositiveInteger(traitlets.Integer):
         return proposal
 
 
-class PositiveFloat(traitlets.Float):
+class PositiveFloat(Float):
     def info(self):
         return u'a positive float'
 
@@ -92,7 +91,7 @@ class PositiveFloat(traitlets.Float):
         return proposal
 
 
-class NonNegativeInteger(traitlets.Integer):
+class NonNegativeInteger(Integer):
     def info(self):
         return u'a non-negative integer'
 
@@ -102,7 +101,7 @@ class NonNegativeInteger(traitlets.Integer):
         return proposal
 
 
-class NonNegativeFloat(traitlets.Float):
+class NonNegativeFloat(Float):
     def info(self):
         return u'a non-negative float'
 
@@ -112,8 +111,8 @@ class NonNegativeFloat(traitlets.Float):
         return proposal
 
 
-class BoundedInteger(traitlets.Integer):
-    def __init__(self, default_value=traitlets.Undefined, bounds=None, **kwargs):
+class BoundedInteger(Integer):
+    def __init__(self, default_value=Undefined, bounds=None, **kwargs):
         super(BoundedInteger, self).__init__(default_value, **kwargs)
         self.minval = bounds[0]
         self.maxval = bounds[1]
@@ -128,8 +127,8 @@ class BoundedInteger(traitlets.Integer):
         return proposal
 
 
-class BoundedFloat(traitlets.Float):
-    def __init__(self, default_value=traitlets.Undefined, bounds=None, **kwargs):
+class BoundedFloat(Float):
+    def __init__(self, default_value=Undefined, bounds=None, **kwargs):
         self.minval = bounds[0]
         self.maxval = bounds[1]
         super(BoundedFloat, self).__init__(default_value, **kwargs)
@@ -144,7 +143,7 @@ class BoundedFloat(traitlets.Float):
         return proposal
 
 
-class FiredrakeConstantTraitlet(traitlets.TraitType):
+class FiredrakeConstantTraitlet(TraitType):
     default_value = None
     info_text = 'a Firedrake Constant'
 
@@ -157,7 +156,7 @@ class FiredrakeConstantTraitlet(traitlets.TraitType):
         return 'Constant({:})'.format(float(self.default_value))
 
 
-class FiredrakeCoefficient(traitlets.TraitType):
+class FiredrakeCoefficient(TraitType):
     default_value = None
     info_text = 'a Firedrake Constant or Function'
 
@@ -172,7 +171,7 @@ class FiredrakeCoefficient(traitlets.TraitType):
         return 'Function'
 
 
-class FiredrakeScalarExpression(traitlets.TraitType):
+class FiredrakeScalarExpression(TraitType):
     default_value = None
     info_text = 'a scalar UFL expression'
 
@@ -190,7 +189,7 @@ class FiredrakeScalarExpression(traitlets.TraitType):
         return 'UFL scalar expression'
 
 
-class FiredrakeVectorExpression(traitlets.TraitType):
+class FiredrakeVectorExpression(TraitType):
     default_value = None
     info_text = 'a vector UFL expression'
 
@@ -208,7 +207,7 @@ class FiredrakeVectorExpression(traitlets.TraitType):
         return 'UFL vector expression'
 
 
-class DatetimeTraitlet(traitlets.TraitType):
+class DatetimeTraitlet(TraitType):
     default_value = None
     info_text = 'a timezone-aware datetime object'
 
@@ -218,7 +217,7 @@ class DatetimeTraitlet(traitlets.TraitType):
         self.error(obj, value)
 
 
-class PETScSolverParameters(traitlets.Dict):
+class PETScSolverParameters(Dict):
     """PETSc solver options dictionary"""
     info_text = 'a PETSc solver options dictionary'
 
@@ -228,7 +227,7 @@ class PETScSolverParameters(traitlets.Dict):
         self.error(obj, value)
 
 
-class PairedEnum(traitlets.Enum):
+class PairedEnum(Enum):
     """A enum whose value must be in a given sequence.
 
     This enum controls a slaved option, with default values provided here.
@@ -239,7 +238,7 @@ class PairedEnum(traitlets.Enum):
     :arg paired_name: trait name this enum is paired with.
     :arg default_value: default value.
     """
-    def __init__(self, values, paired_name, default_value=traitlets.Undefined, **kwargs):
+    def __init__(self, values, paired_name, default_value=Undefined, **kwargs):
         self.paired_defaults = dict(values)
         self.paired_name = paired_name
         values, _ = zip(*values)
@@ -269,7 +268,7 @@ class OptionsBase:
         if isinstance(options, dict):
             params_dict = options
         else:
-            assert isinstance(options, traitlets.HasTraits), 'options must be a dict or HasTraits object'
+            assert isinstance(options, HasTraits), 'options must be a dict or HasTraits object'
             params_dict = options._trait_values
         for key in params_dict:
             self.__setattr__(key, params_dict[key])
@@ -286,12 +285,12 @@ class OptionsBase:
 # HasTraits and Configurable (and all their subclasses) have MetaHasTraits as their metaclass
 # to subclass from HasTraits and another class with ABCMeta as its metaclass, we need a combined
 # meta class that sub(meta)classes from ABCMeta and MetaHasTraits
-class ABCMetaHasTraits(ABCMeta, traitlets.MetaHasTraits):
+class ABCMetaHasTraits(ABCMeta, MetaHasTraits):
     """Combined metaclass of ABCMeta and MetaHasTraits"""
     pass
 
 
-class FrozenHasTraits(OptionsBase, traitlets.HasTraits):
+class FrozenHasTraits(OptionsBase, HasTraits):
     __metaclass__ = ABCMetaHasTraits
     """
     A HasTraits class that only allows adding new attributes in the class
@@ -347,8 +346,8 @@ def attach_paired_options(name, name_trait, value_trait):
         if hasattr(name_trait, 'default_value') and name_trait.default_value is not None:
             return name_trait.paired_defaults[name_trait.default_value]()
 
-    obs_handler = traitlets.observe(name, type="change")
-    def_handler = traitlets.default(name_trait.paired_name)
+    obs_handler = observe(name, type="change")
+    def_handler = default(name_trait.paired_name)
 
     def update_class(cls):
         "Programmatically update the class"

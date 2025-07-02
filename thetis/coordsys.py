@@ -32,13 +32,19 @@ class CoordinateSystem(ABC):
         pass
 
 
-def proj_transform(x, y, trans):
+def proj_transform(x, y, trans=None, source=None, destination=None):
     """
     Transform coordinates from source to target system.
 
     :arg x,y: coordinates, float or numpy.array_like
-    :kwarg trans: pyproj Transformer object
+    :kwarg trans: pyproj Transformer object (optional)
+    :kwarg source: source coordinate system, Proj object
+    :kwarg destination: destination coordinate system, Proj object
     """
+    if trans is None:
+        assert source is not None and destination is not None, \
+            'Either trans or source and destination must be defined'
+        trans = None
     x_is_array = isinstance(x, numpy.ndarray)
     y_is_array = isinstance(y, numpy.ndarray)
     numpy_inputs = x_is_array or y_is_array
@@ -59,9 +65,9 @@ class UTMCoordinateSystem(CoordinateSystem):
     """
     Represents Universal Transverse Mercator coordinate systems
     """
-    def __init__(self, utm_zone, south=False):
+    def __init__(self, utm_zone):
         self.proj_obj = pyproj.Proj(proj='utm', zone=utm_zone, datum='WGS84',
-                                    units='m', errcheck=True, south=south)
+                                    units='m', errcheck=True)
         self.transformer_lonlat = pyproj.Transformer.from_crs(
             self.proj_obj.srs, LL_WGS84.srs)
         self.transformer_xy = pyproj.Transformer.from_crs(
@@ -123,13 +129,38 @@ class UTMCoordinateSystem(CoordinateSystem):
         The rotator converts vector-valued data from longitude, latitude
         coordinates to mesh coordinate system.
         """
-        return VectorCoordSysRotation(self.transformer_xy, lon, lat)
+        return VectorCoordSysRotation(LL_WGS84, self.proj_obj, lon, lat)
 
 
-def get_vector_rotation_matrix(trans, x, y, delta=None):
+def convert_coords(source_sys, target_sys, x, y):
+    """
+    Converts coordinates from source_sys to target_sys
+
+    This function extends pyproj.transform method by handling NaNs correctly.
+
+    :arg source_sys: pyproj coordinate system where (x, y) are defined in
+    :arg target_sys: target pyproj coordinate system
+    :arg x: x coordinate
+    :arg y: y coordinate
+    :type x: float or numpy.array_like
+    :type y: float or numpy.array_like
+    """
+    if isinstance(x, numpy.ndarray):
+        # proj may give wrong results if nans in the arrays
+        lon = numpy.full_like(x, numpy.nan)
+        lat = numpy.full_like(y, numpy.nan)
+        goodIx = numpy.logical_and(numpy.isfinite(x), numpy.isfinite(y))
+        lon[goodIx], lat[goodIx] = pyproj.transform(
+            source_sys, target_sys, x[goodIx], y[goodIx])
+    else:
+        lon, lat = pyproj.transform(source_sys, target_sys, x, y)
+    return lon, lat
+
+
+def get_vector_rotation_matrix(source_sys, target_sys, x, y, delta=None):
     """
     Estimate rotation matrix that converts vectors defined in source_sys to
-    target_sys. Conversion is carried out by the given `trans` object.
+    target_sys.
 
     Assume that we have a vector field defined in source_sys: vectors located at
     (x, y) define the x and y components. We can then rotate the vectors to
@@ -138,8 +169,7 @@ def get_vector_rotation_matrix(trans, x, y, delta=None):
 
     .. code-block:: python
 
-        trans = pyproj.Transformer.from_crs(source_sys, target_sys)
-        R, theta = get_vector_rotation_matrix(trans, x, y)
+        R, theta = get_vector_rotation_matrix(source_sys, target_sys, x, lat)
         v_xy = numpy.array([[v_x], [v_y]])
         v_new = numpy.matmul(R, v_xy)
         v_x2, v_y2 = v_new
@@ -147,8 +177,9 @@ def get_vector_rotation_matrix(trans, x, y, delta=None):
     """
     if delta is None:
         delta = 1e-6  # ~1 m in LL_WGS84
-    x1, y1 = trans.transform(x, y)
-    x2, y2 = trans.transform(x, y + delta)
+    x1, y1 = pyproj.transform(source_sys, target_sys, x, y)
+
+    x2, y2 = pyproj.transform(source_sys, target_sys, x, y + delta)
     dxdl = (x2 - x1) / delta
     dydl = (y2 - y1) / delta
     theta = numpy.arctan2(-dxdl, dydl)
@@ -166,12 +197,14 @@ class VectorCoordSysRotation(object):
     system.
 
     """
-    def __init__(self, trans, x, y):
+    def __init__(self, source_sys, target_sys, x, y):
         """
-        :arg trans: pyproj.Transformer object, maps from source to destination system
-        :arg x, y: coordinates in the source coordinate system
+        :arg source_sys: pyproj coordinate system where (x, y) are defined in
+        :arg target_sys: target pyproj coordinate system
+        :arg x: x coordinate
+        :arg y: y coordinate
         """
-        R, theta = get_vector_rotation_matrix(trans, x, y)
+        R, theta = get_vector_rotation_matrix(source_sys, target_sys, x, y)
         self.rotation_sin = numpy.sin(theta)
         self.rotation_cos = numpy.cos(theta)
 

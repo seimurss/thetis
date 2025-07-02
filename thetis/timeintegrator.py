@@ -85,32 +85,6 @@ class TimeIntegrator(TimeIntegratorBase):
         """
         raise NotImplementedError(f"Picard iterations are not supported for {self} time integrators.")
 
-    def create_fields_old(self):
-        """
-        Create a copy of fields dictionary to store beginning of timestep values
-        """
-        # create functions to hold the values of previous time step
-        self.fields_old = {}
-        for k in sorted(self.fields):
-            if self.fields[k] is not None:
-                if isinstance(self.fields[k], Function):
-                    self.fields_old[k] = Function(
-                        self.fields[k].function_space())
-                elif isinstance(self.fields[k], Constant):
-                    # Although Constants may be changed by the user, we just
-                    # use the same value here, as assigning to domain-less Constants
-                    # causes issues in the adjoint. Constants with a domain, created by Constaint(.., domain=...),
-                    # are now just Functions on the Real space, so are dealt with under isinstance(..., Function)
-                    self.fields_old[k] = self.fields[k]
-
-    def update_fields_old(self):
-        """
-        Update the values of fields_old with those of fields
-        """
-        for k in sorted(self.fields):
-            if isinstance(self.fields[k], Function):
-                self.fields_old[k].assign(self.fields[k])
-
 
 class ForwardEuler(TimeIntegrator):
     """Standard forward Euler time integration scheme."""
@@ -131,7 +105,15 @@ class ForwardEuler(TimeIntegrator):
         super(ForwardEuler, self).__init__(equation, solution, fields, dt, options)
         self.solution_old = Function(self.equation.function_space)
 
-        self.create_fields_old()
+        # create functions to hold the values of previous time step
+        self.fields_old = {}
+        for k in sorted(self.fields):
+            if self.fields[k] is not None:
+                if isinstance(self.fields[k], Function):
+                    self.fields_old[k] = Function(
+                        self.fields[k].function_space())
+                elif isinstance(self.fields[k], Constant):
+                    self.fields_old[k] = Constant(self.fields[k])
 
         u_old = self.solution_old
         u_tri = self.equation.trial
@@ -153,7 +135,9 @@ class ForwardEuler(TimeIntegrator):
     def initialize(self, solution):
         """Assigns initial conditions to all required fields."""
         self.solution_old.assign(solution)
-        self.update_fields_old()
+        # assign values to old functions
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
     @PETSc.Log.EventDecorator("thetis.ForwardEuler.advance")
     def advance(self, t, update_forcings=None):
@@ -162,7 +146,9 @@ class ForwardEuler(TimeIntegrator):
             update_forcings(t + self.dt)
         self.solution_old.assign(self.solution)
         self.solver.solve()
-        self.update_fields_old()
+        # shift time
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
 
 class CrankNicolson(TimeIntegrator):
@@ -189,7 +175,16 @@ class CrankNicolson(TimeIntegrator):
         else:
             self.solver_parameters.setdefault('snes_type', 'newtonls')
         self.solution_old = Function(self.equation.function_space, name='solution_old')
-        self.create_fields_old()
+        # create functions to hold the values of previous time step
+        # TODO is this necessary? is self.fields sufficient?
+        self.fields_old = {}
+        for k in sorted(self.fields):
+            if self.fields[k] is not None:
+                if isinstance(self.fields[k], Function):
+                    self.fields_old[k] = Function(
+                        self.fields[k].function_space(), name=self.fields[k].name()+'_old')
+                elif isinstance(self.fields[k], Constant):
+                    self.fields_old[k] = Constant(self.fields[k])
 
         u = self.solution
         u_old = self.solution_old
@@ -229,7 +224,9 @@ class CrankNicolson(TimeIntegrator):
     def initialize(self, solution):
         """Assigns initial conditions to all required fields."""
         self.solution_old.assign(solution)
-        self.update_fields_old()
+        # assign values to old functions
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
     @PETSc.Log.EventDecorator("thetis.CrankNicolson.advance")
     def advance(self, t, update_forcings=None):
@@ -238,7 +235,9 @@ class CrankNicolson(TimeIntegrator):
             update_forcings(t + self.dt)
         self.solution_old.assign(self.solution)
         self.solver.solve()
-        self.update_fields_old()
+        # shift time
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
     @PETSc.Log.EventDecorator("thetis.CrankNicolson.advance_picard")
     def advance_picard(self, t, update_forcings=None, update_lagged=True, update_fields=True):
@@ -249,7 +248,9 @@ class CrankNicolson(TimeIntegrator):
             self.solution_old.assign(self.solution)
         self.solver.solve()
         if update_fields:
-            self.update_fields_old()
+            # shift time
+            for k in sorted(self.fields_old):
+                self.fields_old[k].assign(self.fields[k])
 
 
 class SteadyState(TimeIntegrator):
@@ -352,8 +353,8 @@ class PressureProjectionPicard(TimeIntegrator):
             self.solution_lagged = Function(self.equation.function_space)
         else:
             self.solution_lagged = self.solution_old
-        uv_lagged, eta_lagged = self.solution_lagged.subfunctions
-        uv_old, eta_old = self.solution_old.subfunctions
+        uv_lagged, eta_lagged = self.solution_lagged.split()
+        uv_old, eta_old = self.solution_old.split()
 
         if (solver_parameters['ksp_type'] == 'preonly'
                 and 'fieldsplit_H_2d' in solver_parameters
@@ -369,8 +370,15 @@ class PressureProjectionPicard(TimeIntegrator):
             raise Exception("The timestepper PressureProjectionPicard is only recommended in combination with the "
                             "dg-cg element_family. If you want to use it in combination with dg-dg or rt-dg you need to adjust the solver_parameters_pressure option.")
 
-        self.create_fields_old()
-
+        # create functions to hold the values of previous time step
+        self.fields_old = {}
+        for k in sorted(self.fields):
+            if self.fields[k] is not None:
+                if isinstance(self.fields[k], Function):
+                    self.fields_old[k] = Function(
+                        self.fields[k].function_space())
+                elif isinstance(self.fields[k], Constant):
+                    self.fields_old[k] = Constant(self.fields[k])
         # for the mom. eqn. the 'eta' field is just one of the 'other' fields
         fields_mom = self.fields.copy()
         fields_mom_old = self.fields_old.copy()
@@ -444,7 +452,9 @@ class PressureProjectionPicard(TimeIntegrator):
         """Assigns initial conditions to all required fields."""
         self.solution_old.assign(solution)
         self.solution_lagged.assign(solution)
-        self.update_fields_old()
+        # assign values to old functions
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
     @PETSc.Log.EventDecorator("thetis.PressureProjectionPicard.advance")
     def advance(self, t, update_forcings=None):
@@ -461,7 +471,9 @@ class PressureProjectionPicard(TimeIntegrator):
             with timed_stage("Pressure solve"):
                 self.solver.solve()
 
-        self.update_fields_old()
+        # shift time
+        for k in sorted(self.fields_old):
+            self.fields_old[k].assign(self.fields[k])
 
 
 class LeapFrogAM3(TimeIntegrator):
@@ -503,8 +515,8 @@ class LeapFrogAM3(TimeIntegrator):
 
         fs = self.equation.function_space
         self.solution_old = Function(fs, name='old solution')
-        self.msolution_old = Cofunction(fs.dual(), name='dual solution')
-        self.rhs_func = Cofunction(fs.dual(), name='rhs linear form')
+        self.msolution_old = Function(fs, name='dual solution')
+        self.rhs_func = Function(fs, name='rhs linear form')
 
         # fully explicit evaluation
         self.a = self.equation.mass_term(self.equation.trial)
@@ -529,7 +541,7 @@ class LeapFrogAM3(TimeIntegrator):
         self.mass_matrix = assemble(self.a)
         self.solution.assign(solution)
         self.solution_old.assign(solution)
-        assemble(self.mass_new, tensor=self.msolution_old)
+        assemble(self.mass_new, self.msolution_old)
         self.lin_solver = LinearSolver(self.mass_matrix)
         # TODO: Linear solver is not annotated and does not accept ad_block_tag
 
@@ -559,9 +571,9 @@ class LeapFrogAM3(TimeIntegrator):
         """
         if self._nontrivial:
             with timed_region('lf_pre_asmb_sol'):
-                assemble(self.mass_new, tensor=self.msolution_old)  # store current solution
+                assemble(self.mass_new, self.msolution_old)  # store current solution
             with timed_region('lf_pre_asmb_rhs'):
-                assemble(self.l_prediction, tensor=self.rhs_func)
+                assemble(self.l_prediction, self.rhs_func)
             with timed_region('lf_pre_asgn_sol'):
                 self.solution_old.assign(self.solution)  # time shift
             with timed_region('lf_pre_solve'):
@@ -570,7 +582,7 @@ class LeapFrogAM3(TimeIntegrator):
     def eval_rhs(self):
         if self._nontrivial:
             with timed_region('lf_cor_asmb_rhs'):
-                assemble(self.l, tensor=self.rhs_func)
+                assemble(self.l, self.rhs_func)
 
     @PETSc.Log.EventDecorator("thetis.LeapFrogAM3.correct")
     def correct(self):
@@ -591,7 +603,7 @@ class LeapFrogAM3(TimeIntegrator):
             with timed_region('lf_cor_incr_rhs'):
                 self.rhs_func += self.msolution_old
             with timed_region('lf_cor_asmb_mat'):
-                assemble(self.a, tensor=self.mass_matrix)
+                assemble(self.a, self.mass_matrix)
             with timed_region('lf_cor_solve'):
                 self._solve_system()
 
@@ -639,9 +651,9 @@ class SSPRK22ALE(TimeIntegrator):
         super(SSPRK22ALE, self).__init__(equation, solution, fields, dt, options)
 
         fs = self.equation.function_space
-        self.mu = Cofunction(fs.dual(), name='dual solution')
-        self.mu_old = Cofunction(fs.dual(), name='dual solution')
-        self.tendency = Cofunction(fs.dual(), name='tendency')
+        self.mu = Function(fs, name='dual solution')
+        self.mu_old = Function(fs, name='dual solution')
+        self.tendency = Function(fs, name='tendency')
 
         # fully explicit evaluation
         self.a = self.equation.mass_term(self.equation.trial)
@@ -677,10 +689,10 @@ class SSPRK22ALE(TimeIntegrator):
         if self._nontrivial:
             # Compute $Mu$ and assign $q_{old} = Mu$
             with timed_region('pre1_asseble_mu'):
-                assemble(self.mu_form, tensor=self.mu_old)
+                assemble(self.mu_form, self.mu_old)
             # Evaluate $k = \Delta t F(u)$
             with timed_region('pre1_asseble_f'):
-                assemble(self.l, tensor=self.tendency)
+                assemble(self.l, self.tendency)
             # $q = q_{old} + k$
             with timed_region('pre1_incr_rhs'):
                 self.mu.assign(self.mu_old + self.tendency)
@@ -700,7 +712,7 @@ class SSPRK22ALE(TimeIntegrator):
         if self._nontrivial:
             # Solve $u = M^{-1}q$
             with timed_region('sol1_assemble_A'):
-                assemble(self.a, tensor=self.lin_solver.A)
+                assemble(self.a, self.lin_solver.A)
             with timed_region('sol1_solve'):
                 self.lin_solver.solve(self.solution, self.mu)
 
@@ -712,7 +724,7 @@ class SSPRK22ALE(TimeIntegrator):
         if self._nontrivial:
             # Evaluate $k = \Delta t F(u)$
             with timed_region('pre2_asseble_f'):
-                assemble(self.l, tensor=self.tendency)
+                assemble(self.l, self.tendency)
             # $q = \frac{1}{2}q + \frac{1}{2}q_{old} + \frac{1}{2}k$
             with timed_region('pre2_incr_rhs'):
                 self.mu.assign(0.5*self.mu + 0.5*self.mu_old + 0.5*self.tendency)
@@ -734,7 +746,7 @@ class SSPRK22ALE(TimeIntegrator):
         if self._nontrivial:
             # Solve $u = M^{-1}q$
             with timed_region('sol2_assemble_A'):
-                assemble(self.a, tensor=self.lin_solver.A)
+                assemble(self.a, self.lin_solver.A)
             with timed_region('sol2_solve'):
                 self.lin_solver.solve(self.solution, self.mu)
 

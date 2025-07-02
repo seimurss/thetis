@@ -197,6 +197,8 @@ __all__ = [
     'MomentumSourceTerm',
     'WindStressTerm',
     'AtmosphericPressureTerm',
+    'GradRadStressTerm',
+    'WaveRollerTerm',
 ]
 
 g_grav = physical_constants['g_grav']
@@ -649,6 +651,39 @@ class WindStressTerm(ShallowWaterMomentumTerm):
         return f
 
 
+class GradRadStressTerm(ShallowWaterMomentumTerm):
+    r"""
+    Wind stress term, :math:`-\tau_w/(H \rho_0)`
+
+    Here :math:`\tau_w` is a user-defined wind stress :class:`Function`.
+    """
+    def residual(self, uv, eta, uv_old, eta_old, fields, fields_old, bnd_conditions=None):
+        grad_rad_stress = fields_old.get('rad_stress_2d')
+        P1_2d = get_functionspace(self.mesh, "CG", 1)
+        eta0 = Function(P1_2d).assign(Constant(0.))
+        total_h = self.depth.get_total_depth(eta_old)
+        f = 0
+        if grad_rad_stress is not None:
+            f += dot(grad_rad_stress, self.u_test)/total_h/rho_0*self.dx
+        return f
+
+class WaveRollerTerm(ShallowWaterMomentumTerm):
+    r"""
+    Wind stress term, :math:`-\tau_w/(H \rho_0)`
+
+    Here :math:`\tau_w` is a user-defined wind stress :class:`Function`.
+    """
+    def residual(self, uv, eta, uv_old, eta_old, fields, fields_old, bnd_conditions=None):
+        roller_stress = fields_old.get('roller_2d')
+        P1_2d = get_functionspace(self.mesh, "CG", 1)
+        eta0 = Function(P1_2d).assign(Constant(0.))
+        total_h = self.depth.get_total_depth(eta_old)
+        f = 0
+        if roller_stress is not None:
+            f += dot(roller_stress, self.u_test)/total_h/rho_0*self.dx
+        return f
+
+
 class AtmosphericPressureTerm(ShallowWaterMomentumTerm):
     r"""
     Atmospheric pressure term, :math:`\nabla (p_a / \rho_0)`
@@ -775,19 +810,16 @@ class TurbineDragTerm(ShallowWaterMomentumTerm):
         c_t = (C_T A_T d)/2
 
     """
-    def __init__(self, u_test, u_space, eta_space,
-                 depth, options=None, tidal_farms=None):
-        super().__init__(u_test, u_space, eta_space, depth, options=options)
-        self.tidal_farms = tidal_farms
-
     def residual(self, uv, eta, uv_old, eta_old, fields, fields_old, bnd_conditions):
         total_h = self.depth.get_total_depth(eta_old)
         f = 0
-        for farm in self.tidal_farms:
-            density = farm.turbine_density
-            c_t = farm.friction_coefficient(uv_old, total_h)
+        for subdomain_id, farm_options in self.options.tidal_turbine_farms.items():
+            density = farm_options.turbine_density
+            C_T = farm_options.turbine_options.thrust_coefficient
+            A_T = pi * (farm_options.turbine_options.diameter/2.)**2
+            C_D = (C_T * A_T * density)/2.
             unorm = sqrt(dot(uv_old, uv_old))
-            f += c_t * density * unorm * inner(self.u_test, uv) / total_h * farm.dx
+            f += C_D * unorm * inner(self.u_test, uv) / total_h * self.dx(subdomain_id)
         return -f
 
 
@@ -864,7 +896,7 @@ class BaseShallowWaterEquation(Equation):
         self.depth = depth
         self.options = options
 
-    def add_momentum_terms(self, *args, tidal_farms=None):
+    def add_momentum_terms(self, *args):
         self.add_term(ExternalPressureGradientTerm(*args), 'implicit')
         self.add_term(HorizontalAdvectionTerm(*args), 'implicit')
         self.add_term(HorizontalViscosityTerm(*args), 'explicit')
@@ -875,9 +907,10 @@ class BaseShallowWaterEquation(Equation):
         self.add_term(LinearDragTerm(*args), 'implicit')
         self.add_term(BoundaryDragTerm(*args), 'implicit')
         self.add_term(BottomDrag3DTerm(*args), 'source')
+        self.add_term(TurbineDragTerm(*args), 'implicit')
         self.add_term(MomentumSourceTerm(*args), 'source')
-        if tidal_farms:
-            self.add_term(TurbineDragTerm(*args, tidal_farms), 'implicit')
+        self.add_term(GradRadStressTerm(*args), 'source')
+        self.add_term(WaveRollerTerm(*args), 'source')
 
     def add_continuity_terms(self, *args):
         self.add_term(HUDivTerm(*args), 'implicit')
@@ -897,7 +930,7 @@ class ShallowWaterEquations(BaseShallowWaterEquation):
     This defines the full 2D SWE equations :eq:`swe_freesurf` -
     :eq:`swe_momentum`.
     """
-    def __init__(self, function_space, depth, options, tidal_farms=None):
+    def __init__(self, function_space, depth, options):
         """
         :arg function_space: Mixed function space where the solution belongs
         :arg depth: :class: `DepthExpression` containing depth info
@@ -906,9 +939,9 @@ class ShallowWaterEquations(BaseShallowWaterEquation):
         super(ShallowWaterEquations, self).__init__(function_space, depth, options)
 
         u_test, eta_test = TestFunctions(function_space)
-        u_space, eta_space = function_space.subfunctions
+        u_space, eta_space = function_space.split()
 
-        self.add_momentum_terms(u_test, u_space, eta_space, depth, options, tidal_farms=tidal_farms)
+        self.add_momentum_terms(u_test, u_space, eta_space, depth, options)
 
         self.add_continuity_terms(eta_test, eta_space, u_space, depth, options)
         self.bathymetry_displacement_mass_term = BathymetryDisplacementMassTerm(
@@ -945,7 +978,7 @@ class ModeSplit2DEquations(BaseShallowWaterEquation):
         super(ModeSplit2DEquations, self).__init__(function_space, depth, options)
 
         u_test, eta_test = TestFunctions(function_space)
-        u_space, eta_space = function_space.subfunctions
+        u_space, eta_space = function_space.split()
 
         self.add_momentum_terms(u_test, u_space, eta_space, depth, options)
 
@@ -1002,7 +1035,7 @@ class ShallowWaterMomentumEquation(BaseShallowWaterEquation):
     2D depth averaged momentum equation :eq:`swe_momentum` in non-conservative
     form.
     """
-    def __init__(self, u_test, u_space, eta_space, depth, options, tidal_farms=None):
+    def __init__(self, u_test, u_space, eta_space, depth, options):
         """
         :arg u_test: test function of the velocity function space
         :arg u_space: velocity function space
@@ -1011,7 +1044,7 @@ class ShallowWaterMomentumEquation(BaseShallowWaterEquation):
         :arg options: :class:`.AttrDict` object containing all circulation model options
         """
         super(ShallowWaterMomentumEquation, self).__init__(u_space, depth, options)
-        self.add_momentum_terms(u_test, u_space, eta_space, depth, options, tidal_farms=tidal_farms)
+        self.add_momentum_terms(u_test, u_space, eta_space, depth, options)
 
     def residual(self, label, solution, solution_old, fields, fields_old, bnd_conditions):
         uv = solution

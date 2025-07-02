@@ -39,6 +39,9 @@ def compute_wind_stress(wind_u, wind_v, method='LargeYeager2009'):
         Wind stress formulation by [2]
     - "LargeYeager2009":
         Wind stress formulation by [3]
+    - "Wu1969":
+        Wind stress formulation by [4]
+
 
     [1] Large and Pond (1981). Open Ocean Momentum Flux Measurements in
         Moderate to Strong Winds. Journal of Physical Oceanography,
@@ -50,6 +53,8 @@ def compute_wind_stress(wind_u, wind_v, method='LargeYeager2009'):
     [3] Large and Yeager (2009). The global climatology of an interannually
         varying air–sea flux data set. Climate Dynamics,
         33:341–364. http://dx.doi.org/10.1007/s00382-008-0441-3
+    [4] Wu (1969). Wind stress and surface roughness at air-sea interface.
+        Journal of Geophysical Research, 74(2):444-455
 
     :arg wind_u, wind_v: Wind u and v components as numpy arrays
     :kwarg method: Choose the stress formulation. Currently supports:
@@ -63,8 +68,24 @@ def compute_wind_stress(wind_u, wind_v, method='LargeYeager2009'):
         C_D = numpy.ones_like(wind_u)*CD_LOW
         high_wind = wind_mag > 11.0
         C_D[high_wind] = 1.0e-3*(0.49 + 0.065*wind_mag[high_wind])
+
     elif method == 'SmithBanke1975':
         C_D = (0.63 + 0.066 * wind_mag)/1000.
+
+    elif method== "Wu1969":
+        # Value of C_D for |U|>15m/s
+        CD_HIGH = 0.0026
+        C_D = numpy.ones_like(wind_u) * CD_HIGH
+        # Determine the intermediate wind speeds, i.e. 1 <= |U| <= 15m/s
+        int_wind = (1 <= wind_mag) & (wind_mag <= 15)
+        C_D[int_wind] = 0.001 * 0.5 * wind_mag[int_wind]**(0.5)
+        # Determinethe low windspeeds, i.e. |U| < 1m/s
+        low_wind = (0 < wind_mag) & (wind_mag < 1)
+        C_D[low_wind] = 0.001 * 1.25 / wind_mag[low_wind]**(0.2)
+        # For no wind
+        no_wind = wind_mag == 0
+        C_D[no_wind] = 0
+
     elif method == 'LargeYeager2009':
         # NOTE wind velocity should be shifted to 10 m neutral equivalent
         # but it requires air temperature, humidity and iteration, see [3]
@@ -73,6 +94,7 @@ def compute_wind_stress(wind_u, wind_v, method='LargeYeager2009'):
         C_D = 1.e-3 * (2.7 / (wind_mag + eps) + 0.142
                        + wind_mag / 13.09 - 3.14807e-10*wind_mag**6)
         C_D[high_wind] = 2.34e-3
+
     tau = C_D*rho_air*wind_mag
     tau_x = tau*wind_u
     tau_y = tau*wind_v
@@ -84,7 +106,7 @@ class ATMNetCDFTime(interpolation.NetCDFTimeParser):
     A TimeParser class for reading atmosphere model output files.
     """
     @PETSc.Log.EventDecorator("thetis.ATMNetCDFTime.__init__")
-    def __init__(self, filename, max_duration=None, verbose=False, time_variable_name='time'):
+    def __init__(self, filename, max_duration=None, verbose=False):
         """
         :arg filename:
         :kwarg max_duration: Time span to read from each file (in seconds).
@@ -93,7 +115,7 @@ class ATMNetCDFTime(interpolation.NetCDFTimeParser):
             all time steps are loaded. Default: None.
         :kwarg bool verbose: Se True to print debug information.
         """
-        super(ATMNetCDFTime, self).__init__(filename, time_variable_name=time_variable_name)
+        super(ATMNetCDFTime, self).__init__(filename, time_variable_name='time')
         # NOTE these are daily forecast files, limit time steps to one day
         self.start_time = timezone.epoch_to_datetime(float(self.time_array[0]))
         self.end_time_raw = timezone.epoch_to_datetime(float(self.time_array[-1]))
@@ -123,8 +145,7 @@ class ATMInterpolator(object):
                  ncfile_pattern, init_date,
                  vect_rotator=None,
                  east_wind_var_name='uwind', north_wind_var_name='vwind',
-                 pressure_var_name='prmsl', time_variable_name='time',
-                 fill_mode=None,
+                 pressure_var_name='prmsl', fill_mode=None,
                  fill_value=numpy.nan,
                  verbose=False):
         """
@@ -161,8 +182,7 @@ class ATMInterpolator(object):
         var_list = [east_wind_var_name, north_wind_var_name, pressure_var_name]
         self.reader = interpolation.NetCDFSpatialInterpolator(
             self.grid_interpolator, var_list)
-        self.timesearch_obj = interpolation.NetCDFTimeSearch(
-            ncfile_pattern, init_date, ATMNetCDFTime, verbose=verbose, time_variable_name=time_variable_name)
+        self.timesearch_obj = interpolation.NetCDFTimeSearch(ncfile_pattern, init_date, ATMNetCDFTime, verbose=verbose)
         self.time_interpolator = interpolation.LinearTimeInterpolator(self.timesearch_obj, self.reader)
         lon = self.grid_interpolator.mesh_lonlat[:, 0]
         lat = self.grid_interpolator.mesh_lonlat[:, 1]
@@ -183,7 +203,7 @@ class ATMInterpolator(object):
         """
         east_wind, north_wind, prmsl = self.time_interpolator(time)
         east_strs, north_strs = compute_wind_stress(east_wind, north_wind)
-        if self.wind_stress_field.ufl_shape == (3,):
+        if self.wind_stress_field.geometric_dimension() == 3:
             u_strs, v_strs, z_strs = self.vect_rotator(east_strs, north_strs)
             self.wind_stress_field.dat.data_with_halos[:, 0] = u_strs
             self.wind_stress_field.dat.data_with_halos[:, 1] = v_strs
@@ -857,7 +877,7 @@ class GenericInterpolator2D(object):
             i, j = self.vector_field_index
             east_comp = vals[i]
             north_comp = vals[j]
-            if self.vector_field.ufl_shape == (3,):
+            if self.vector_field.geometric_dimension() == 3:
                 u, v, w = self.vect_rotator(east_comp, north_comp)
                 self.vector_field.dat.data_with_halos[:, 0] = u
                 self.vector_field.dat.data_with_halos[:, 1] = v

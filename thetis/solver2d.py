@@ -14,7 +14,6 @@ import weakref
 import time as time_mod
 from mpi4py import MPI
 from . import exporter
-from .turbines import TidalTurbineFarm, DiscreteTidalTurbineFarm
 from .field_defs import field_metadata
 from .options import ModelOptions2d
 from . import callback
@@ -385,7 +384,7 @@ class FlowSolver2d(FrozenClass):
             self._field_preproc_funcs[label] = preproc_func
 
     @unfrozen
-    @PETSc.Log.EventDecorator("thetis.FlowSolver2d.create_fields")
+    @PETSc.Log.EventDecorator("thetis.FlowSolver2d.create_equations")
     def create_fields(self):
         """
         Creates field Functions
@@ -405,10 +404,27 @@ class FlowSolver2d(FrozenClass):
                                      use_nonlinear_equations=self.options.use_nonlinear_equations,
                                      use_wetting_and_drying=self.options.use_wetting_and_drying,
                                      wetting_and_drying_alpha=self.options.wetting_and_drying_alpha)
+        # if self.options.wave_curr_inter:
+
+        self.fields.rad_stress_2d = Function(self.function_spaces.P1v_2d,
+            name='rad_stress_2d')
+        self.fields.roller_2d = Function(self.function_spaces.P1v_2d,
+                                             name='roller_2d')
+
+        # if self.options.wave_curr_inter:
+        #     self.add_new_field(
+        #         Function(self.function_spaces.P1_2d, name='hs_wave'),
+        #         'hs_wave',
+        #         "Significant waveheight",
+        #         "Hs2d",
+        #         shortname="WaveHeight",
+        #         unit="m"
+        #     )
+
 
         # Add fields for shallow water modelling
         self.fields.solution_2d = Function(self.function_spaces.V_2d, name='solution_2d')
-        uv_2d, elev_2d = self.fields.solution_2d.subfunctions  # correct treatment of the split 2d functions
+        uv_2d, elev_2d = self.fields.solution_2d.split()  # correct treatment of the split 2d functions
         self.fields.uv_2d = uv_2d
         self.fields.elev_2d = elev_2d
 
@@ -424,7 +440,7 @@ class FlowSolver2d(FrozenClass):
             if num_labels > 1:
                 self.fields[system] = parent
             self.options.tracer_fields[system] = parent
-            children = [parent] if num_labels == 1 else parent.subfunctions
+            children = [parent] if num_labels == 1 else parent.split()
             for label, function in zip(labels, children):
                 tracer = self.options.tracer[label]
                 function.rename(label)
@@ -458,40 +474,14 @@ class FlowSolver2d(FrozenClass):
             self.create_fields()
         self.equations = AttrDict()
 
-        # tidal farms, if any
-        if len(self.options.tidal_turbine_farms) + len(self.options.discrete_tidal_turbine_farms) > 0:
-            self.tidal_farms = []
-            p = self.function_spaces.U_2d.ufl_element().degree()
-            quad_degree = 2*p + 1
-            for subdomain, farm_options_list in self.options.tidal_turbine_farms.items():
-                if not isinstance(farm_options_list, list):
-                    error_msg = "Farm options must be entered as a list e.g. " \
-                                "solver2d.FlowSolver2d(mesh2d, bathymetry_2d).options.discrete_tidal_turbine_farms[site_ID] = " \
-                                "[farm_options]"
-                    raise TypeError(error_msg)
-                for farm_options in farm_options_list:
-                    fdx = dx(subdomain, degree=quad_degree)
-                    self.tidal_farms.append(TidalTurbineFarm(farm_options.turbine_density, fdx, farm_options))
-            for subdomain, farm_options_list in self.options.discrete_tidal_turbine_farms.items():
-                if not isinstance(farm_options_list, list):
-                    error_msg = "Farm options must be entered as a list e.g. " \
-                                "solver2d.FlowSolver2d(mesh2d, bathymetry_2d).options.discrete_tidal_turbine_farms[site_ID] = " \
-                                "[farm_options]"
-                    raise TypeError(error_msg)
-                for farm_options in farm_options_list:
-                    fdx = dx(subdomain, degree=farm_options.quadrature_degree)
-                    self.tidal_farms.append(DiscreteTidalTurbineFarm(self.mesh2d, fdx, farm_options))
-        else:
-            self.tidal_farms = None
         # Shallow water equations for hydrodynamic modelling
         self.equations.sw = shallowwater_eq.ShallowWaterEquations(
             self.fields.solution_2d.function_space(),
             self.depth,
             self.options,
-            tidal_farms=self.tidal_farms
         )
         self.equations.sw.bnd_functions = self.bnd_functions['shallow_water']
-        uv_2d, elev_2d = self.fields.solution_2d.subfunctions
+        uv_2d, elev_2d = self.fields.solution_2d.split()
 
         # Passive tracer equations
         for system, parent in self.options.tracer_fields.items():
@@ -555,6 +545,8 @@ class FlowSolver2d(FrozenClass):
             'atmospheric_pressure': self.options.atmospheric_pressure,
             'momentum_source': self.options.momentum_source_2d,
             'volume_source': self.options.volume_source_2d,
+            'rad_stress_2d' : self.fields.rad_stress_2d,
+            "roller_2d" : self.fields.roller_2d
         }
         bnd_conditions = self.bnd_functions['shallow_water']
         if self.options.swe_timestepper_type == 'PressureProjectionPicard':
@@ -562,8 +554,7 @@ class FlowSolver2d(FrozenClass):
             self.equations.mom = shallowwater_eq.ShallowWaterMomentumEquation(
                 u_test, self.function_spaces.U_2d, self.function_spaces.H_2d,
                 self.depth,
-                options=self.options,
-                tidal_farms=self.tidal_farms
+                options=self.options
             )
             self.equations.mom.bnd_functions = bnd_conditions
             return integrator(self.equations.sw, self.equations.mom, self.fields.solution_2d,
@@ -577,7 +568,7 @@ class FlowSolver2d(FrozenClass):
         """
         Gets tracer timestepper object with appropriate parameters
         """
-        uv, elev = self.fields.solution_2d.subfunctions
+        uv, elev = self.fields.solution_2d.split()
         fields = {
             'elev_2d': elev,
             'uv_2d': uv,
@@ -602,7 +593,7 @@ class FlowSolver2d(FrozenClass):
         """
         Gets sediment timestepper object with appropriate parameters
         """
-        uv, elev = self.fields.solution_2d.subfunctions
+        uv, elev = self.fields.solution_2d.split()
         fields = {
             'elev_2d': elev,
             'uv_2d': uv,
@@ -619,7 +610,7 @@ class FlowSolver2d(FrozenClass):
         """
         Gets exner timestepper object with appropriate parameters
         """
-        uv, elev = self.fields.solution_2d.subfunctions
+        uv, elev = self.fields.solution_2d.split()
         if not self.options.sediment_model_options.solve_suspended_sediment:
             self.fields.sediment_2d = Function(elev.function_space()).interpolate(Constant(0.0))
         fields = {
@@ -757,7 +748,7 @@ class FlowSolver2d(FrozenClass):
         """
         if not self._initialized:
             self.initialize()
-        uv_2d, elev_2d = self.fields.solution_2d.subfunctions
+        uv_2d, elev_2d = self.fields.solution_2d.split()
         if elev is not None:
             elev_2d.project(elev)
         if uv is not None:
@@ -779,6 +770,11 @@ class FlowSolver2d(FrozenClass):
                 if sediment_options.use_sediment_conservative_form:
                     sediment = sediment * self.depth.get_total_depth(elev_2d)
                 self.fields.sediment_2d.project(sediment)
+
+        # if self.options.wave_curr_inter:
+        #     self.fields.rad_stress_2d.assign(as_vector([0.,0.]))
+        #     self.fields.roller_2d.assign(as_vector([0.,0.]))
+            # self.fields.hs_wave.project(Constant(0.))
 
         self.timestepper.initialize(self.fields.solution_2d)
 
@@ -923,8 +919,8 @@ class FlowSolver2d(FrozenClass):
                 e = (label, norm_q, '10.4f')
                 entries.append(e)
         else:
-            norm_h = norm(self.fields.solution_2d.subfunctions[1])
-            norm_u = norm(self.fields.solution_2d.subfunctions[0])
+            norm_h = norm(self.fields.solution_2d.split()[1])
+            norm_u = norm(self.fields.solution_2d.split()[0])
             entries += [
                 ('eta norm', norm_h, '14.4f'),
                 ('u norm', norm_u, '14.4f'),
@@ -942,56 +938,20 @@ class FlowSolver2d(FrozenClass):
         sys.stdout.flush()
 
     @PETSc.Log.EventDecorator("thetis.FlowSolver2d.iterate")
-    def iterate(self, update_forcings=None, export_func=None):
+    def iterate(self, update_forcings=None,
+                export_func=None):
         """
         Runs the simulation
-
-        Wrapper for function for `create_iterator` generator and automatically
-        iterates over the time loop until time ``options.simulation_end_time`` is reached.
-        Exports fields to disk on ``options.simulation_export_time`` intervals.
-
-        :kwarg update_forcings: User-defined function that takes simulation
-            time as an argument and updates time-dependent boundary conditions
-            (if any).
-        :kwarg export_func: User-defined function (with no arguments) that will
-            be called on every export.
-        """
-        for _ in self.create_iterator(update_forcings=update_forcings,
-                                      export_func=export_func):
-            pass
-
-    @PETSc.Log.EventDecorator("thetis.FlowSolver2d.create_iterator")
-    def create_iterator(self, update_forcings=None, export_func=None):
-        """
-        Creates a generator to iterate through the simulation and return access
-        to time advancing function when time control is handled externally.
 
         Iterates over the time loop until time ``options.simulation_end_time`` is reached.
         Exports fields to disk on ``options.simulation_export_time`` intervals.
 
-        For example:
-
-        .. code-block:: python
-
-            for t in solver_obj.create_iterator():
-                # user code
-
-        or, to get per time-step control:
-
-        .. code-block:: python
-
-            thetis_timestepper = solver_obj.create_iterator()
-
-            while t_Thetis<t_end - timestep and .... :
-                t_Thetis = next(thetis_timestepper)
-
         :kwarg update_forcings: User-defined function that takes simulation
             time as an argument and updates time-dependent boundary conditions
             (if any).
         :kwarg export_func: User-defined function (with no arguments) that will
             be called on every export.
         """
-
         if not self._initialized:
             self.initialize()
 
@@ -1079,9 +1039,6 @@ class FlowSolver2d(FrozenClass):
         while self.simulation_time <= self.options.simulation_end_time - t_epsilon:
             self.timestepper.advance(self.simulation_time, update_forcings)
 
-            # returns internal simulation time
-            yield self.simulation_time
-
             # Move to next time step
             self.iteration += 1
             internal_iteration += 1
@@ -1102,4 +1059,212 @@ class FlowSolver2d(FrozenClass):
                 if export_func is not None:
                     export_func()
 
-        return self.simulation_time
+    @PETSc.Log.EventDecorator("thetis.FlowSolver2d.iterate_coupled")
+    def iterate_coupled(self, update_forcings=None,
+                export_func=None):
+        """
+        Runs the simulation
+
+        Iterates over the time loop until time ``options.simulation_end_time`` is reached.
+        Exports fields to disk on ``options.simulation_export_time`` intervals.
+
+        :kwarg update_forcings: User-defined function that takes simulation
+            time as an argument and updates time-dependent boundary conditions
+            (if any).
+        :kwarg export_func: User-defined function (with no arguments) that will
+            be called on every export.
+        """
+        # if not self._initialized:
+        #     self.initialize()
+
+        self.options.use_limiter_for_tracers &= self.options.polynomial_degree > 0
+
+        t_epsilon = 1.0e-5
+        cputimestamp = time_mod.perf_counter()
+        next_export_t = (self.simulation_time//self.options.simulation_export_time + 1) * self.options.simulation_export_time
+
+        # dump_hdf5 = self.options.export_diagnostics and not self.options.no_exports
+        # if self.options.check_volume_conservation_2d:
+        #     c = callback.VolumeConservation2DCallback(self,
+        #                                               export_to_hdf5=dump_hdf5,
+        #                                               append_to_log=True)
+        #     self.add_callback(c)
+        #
+        # if self.options.check_tracer_conservation:
+        #     for label, tracer in self.options.tracer.items():
+        #         if tracer.use_conservative_form:
+        #             c = callback.ConservativeTracerMassConservation2DCallback(
+        #                 label,
+        #                 self,
+        #                 export_to_hdf5=dump_hdf5,
+        #                 append_to_log=True)
+        #         else:
+        #             c = callback.TracerMassConservation2DCallback(label,
+        #                                                           self,
+        #                                                           export_to_hdf5=dump_hdf5,
+        #                                                           append_to_log=True)
+        #         self.add_callback(c, eval_interval='export')
+        # if self.options.sediment_model_options.check_sediment_conservation:
+        #     if self.options.sediment_model_options.use_sediment_conservative_form:
+        #         c = callback.ConservativeTracerMassConservation2DCallback(
+        #             'sediment_2d',
+        #             self,
+        #             export_to_hdf5=dump_hdf5,
+        #             append_to_log=True)
+        #     else:
+        #         c = callback.TracerMassConservation2DCallback('sediment_2d',
+        #                                                       self,
+        #                                                       export_to_hdf5=dump_hdf5,
+        #                                                       append_to_log=True)
+        #     self.add_callback(c, eval_interval='export')
+        #
+        # if self.options.check_tracer_overshoot:
+        #     for label in self.options.tracer:
+        #         c = callback.TracerOvershootCallBack(label,
+        #                                              self,
+        #                                              export_to_hdf5=dump_hdf5,
+        #                                              append_to_log=True)
+        #         self.add_callback(c, eval_interval='export')
+        # if self.options.sediment_model_options.check_sediment_overshoot:
+        #     c = callback.TracerOvershootCallBack('sediment_2d',
+        #                                          self,
+        #                                          export_to_hdf5=dump_hdf5,
+        #                                          append_to_log=True)
+        #     self.add_callback(c, eval_interval='export')
+
+
+        initial_simulation_time = self.simulation_time
+        internal_iteration = 0
+
+        while self.simulation_time <= self.options.simulation_end_time - t_epsilon:
+            self.timestepper.advance(self.simulation_time, update_forcings)
+
+            # Move to next time step
+            self.iteration += 1
+            internal_iteration += 1
+            self.simulation_time = initial_simulation_time + internal_iteration * self.dt
+
+            self.callbacks.evaluate(mode='timestep')
+
+            # Write the solution to file
+            if self.simulation_time >= next_export_t - t_epsilon:
+                self.i_export += 1
+                next_export_t += self.options.simulation_export_time
+
+                cputime = time_mod.perf_counter() - cputimestamp
+                cputimestamp = time_mod.perf_counter()
+                self.print_state(cputime)
+
+                self.export()
+                if export_func is not None:
+                    export_func()
+
+
+    @PETSc.Log.EventDecorator("thetis.FlowSolver2d.t0_coupled")
+    def t0_coupled(self,
+                        export_func=None):
+        """
+        Runs the simulation
+
+        Iterates over the time loop until time ``options.simulation_end_time`` is reached.
+        Exports fields to disk on ``options.simulation_export_time`` intervals.
+
+        :kwarg update_forcings: User-defined function that takes simulation
+            time as an argument and updates time-dependent boundary conditions
+            (if any).
+        :kwarg export_func: User-defined function (with no arguments) that will
+            be called on every export.
+        """
+        # TODO I think export function is obsolete as callbacks are in place
+        if not self._initialized:
+            self.initialize()
+
+        self.options.use_limiter_for_tracers &= self.options.polynomial_degree > 0
+
+        t_epsilon = 1.0e-5
+        cputimestamp = time_mod.perf_counter()
+        next_export_t = (self.simulation_time // self.options.simulation_export_time + 1) * self.options.simulation_export_time
+
+        dump_hdf5 = self.options.export_diagnostics and not self.options.no_exports
+        if self.options.check_volume_conservation_2d:
+            c = callback.VolumeConservation2DCallback(self,
+                                                      export_to_hdf5=dump_hdf5,
+                                                      append_to_log=True)
+            self.add_callback(c)
+
+        if self.options.check_tracer_conservation:
+            for label, tracer in self.options.tracer.items():
+                if tracer.use_conservative_form:
+                    c = callback.ConservativeTracerMassConservation2DCallback(
+                        label,
+                        self,
+                        export_to_hdf5=dump_hdf5,
+                        append_to_log=True)
+                else:
+                    c = callback.TracerMassConservation2DCallback(label,
+                                                                  self,
+                                                                  export_to_hdf5=dump_hdf5,
+                                                                  append_to_log=True)
+                self.add_callback(c, eval_interval='export')
+        if self.options.sediment_model_options.check_sediment_conservation:
+            if self.options.sediment_model_options.use_sediment_conservative_form:
+                c = callback.ConservativeTracerMassConservation2DCallback(
+                    'sediment_2d',
+                    self,
+                    export_to_hdf5=dump_hdf5,
+                    append_to_log=True)
+            else:
+                c = callback.TracerMassConservation2DCallback('sediment_2d',
+                                                              self,
+                                                              export_to_hdf5=dump_hdf5,
+                                                              append_to_log=True)
+            self.add_callback(c, eval_interval='export')
+
+        if self.options.check_tracer_overshoot:
+            for label in self.options.tracer:
+                c = callback.TracerOvershootCallBack(label,
+                                                     self,
+                                                     export_to_hdf5=dump_hdf5,
+                                                     append_to_log=True)
+                self.add_callback(c, eval_interval='export')
+        if self.options.sediment_model_options.check_sediment_overshoot:
+            c = callback.TracerOvershootCallBack('sediment_2d',
+                                                 self,
+                                                 export_to_hdf5=dump_hdf5,
+                                                 append_to_log=True)
+            self.add_callback(c, eval_interval='export')
+
+        initial_simulation_time = self.simulation_time
+        internal_iteration = 0
+
+        # Initial export
+        self.print_state(0.0, print_header=True)
+        self.callbacks.evaluate(mode='timestep')
+        if self.export_initial_state:
+            self.export()
+            if export_func is not None:
+                export_func()
+            if 'vtk' in self.exporters and isinstance(self.fields.bathymetry_2d, Function):
+                self.exporters['vtk'].export_bathymetry(self.fields.bathymetry_2d)
+        # while self.simulation_time <= self.options.simulation_end_time - t_epsilon:
+        #     self.timestepper.advance(self.simulation_time, update_forcings)
+        #
+        #     # Move to next time step
+        #     self.iteration += 1
+        #     internal_iteration += 1
+        #     self.simulation_time = initial_simulation_time + internal_iteration * self.dt
+        #
+        #     self.callbacks.evaluate(mode='timestep')
+        #
+        #     # Write the solution to file
+        #     if self.simulation_time >= next_export_t - t_epsilon:
+        #         self.i_export += 1
+        #         next_export_t += self.options.simulation_export_time
+        #
+        #         cputime = time_mod.perf_counter() - cputimestamp
+        #         cputimestamp = time_mod.perf_counter()
+        #         self.print_state(cputime)
+        #
+        #         self.export()
+        #         if export_func is not None:
+        #             export_func()

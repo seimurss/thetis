@@ -1,9 +1,9 @@
 import firedrake as fd
-from firedrake.adjoint import *
+from firedrake_adjoint import *
 import ufl
 from .configuration import FrozenHasTraits
 from .solver2d import FlowSolver2d
-from .utility import create_directory, print_function_value_range, get_functionspace, unfrozen, domain_constant
+from .utility import create_directory, print_function_value_range, get_functionspace, unfrozen
 from .log import print_output
 from .diagnostics import HessianRecoverer2D
 from .exporter import HDF5Exporter
@@ -47,7 +47,7 @@ class InversionManager(FrozenHasTraits):
         self.real = real
         self.penalty_parameters = penalty_parameters
         self.cost_function_scaling = cost_function_scaling or fd.Constant(1.0)
-        self.sta_manager.cost_function_scaling = self.cost_function_scaling
+        self.sta_manager.cost_function_scaling.assign(cost_function_scaling)
         self.test_consistency = test_consistency
         self.test_gradient = test_gradient
         self.outfiles_m = []
@@ -80,9 +80,9 @@ class InversionManager(FrozenHasTraits):
             create_directory(self.output_dir + '/hdf5')
             for i in range(len(self.control_coeff_list)):
                 self.outfiles_m.append(
-                    fd.VTKFile(f'{self.output_dir}/control_progress_{i:02d}.pvd'))
+                    fd.File(f'{self.output_dir}/control_progress_{i:02d}.pvd'))
                 self.outfiles_dJdm.append(
-                    fd.VTKFile(f'{self.output_dir}/gradient_progress_{i:02d}.pvd'))
+                    fd.File(f'{self.output_dir}/gradient_progress_{i:02d}.pvd'))
         self.initialized = True
 
     def add_control(self, f):
@@ -207,7 +207,6 @@ class InversionManager(FrozenHasTraits):
         def gradient_eval_cb(j, djdm, m):
             self.set_control_state(j, djdm, m)
             self.nb_grad_evals += 1
-            return djdm
 
         params = {
             'derivative_cb_post': gradient_eval_cb,
@@ -252,8 +251,7 @@ class InversionManager(FrozenHasTraits):
                 var.dat.data[i] = numpy.var(self.sta_manager.observation_values[j])
             self.sta_manager.station_weight_0d.interpolate(1/var)
 
-        def cost_fn():
-            t = solver_obj.simulation_time
+        def cost_fn(t):
             misfit = self.sta_manager.eval_cost_function(t)
             self.J_misfit += misfit
             self.J += misfit
@@ -477,8 +475,6 @@ class StationObservationManager:
         self.mod_values_0d = fd.Function(self.fs_points_0d, name='model values')
         self.indicator_0d = fd.Function(self.fs_points_0d, name='station use indicator')
         self.indicator_0d.assign(1.0)
-        self.cost_function_scaling_0d = domain_constant(0.0, mesh0d)
-        self.cost_function_scaling_0d.assign(self.cost_function_scaling)
         self.station_weight_0d = fd.Function(self.fs_points_0d, name='station-wise weighting')
         self.station_weight_0d.assign(1.0)
         interp_kw = {}
@@ -488,27 +484,26 @@ class StationObservationManager:
         # Construct timeseries interpolator
         self.station_interpolators = []
         self.local_station_index = []
-        if len(mesh0d.coordinates.dat.data[:]) > 0:
-            for i in range(self.fs_points_0d.dof_dset.size):
-                # loop over local DOFs and match coordinates to observations
-                # NOTE this must be done manually as VertexOnlyMesh reorders points
-                x_mesh, y_mesh = mesh0d.coordinates.dat.data[i, :]
-                xy_diff = xy - numpy.array([x_mesh, y_mesh])
-                xy_dist = numpy.sqrt(xy_diff[:, 0]**2 + xy_diff[:, 1]**2)
-                j = numpy.argmin(xy_dist)
-                self.local_station_index.append(j)
+        for i in range(self.fs_points_0d.dof_dset.size):
+            # loop over local DOFs and match coordinates to observations
+            # NOTE this must be done manually as VertexOnlyMesh reorders points
+            x_mesh, y_mesh = mesh0d.coordinates.dat.data[i, :]
+            xy_diff = xy - numpy.array([x_mesh, y_mesh])
+            xy_dist = numpy.sqrt(xy_diff[:, 0]**2 + xy_diff[:, 1]**2)
+            j = numpy.argmin(xy_dist)
+            self.local_station_index.append(j)
 
-                x, y = xy[j, :]
-                t = self.observation_time[j]
-                v = self.observation_values[j]
-                x_mesh, y_mesh = mesh0d.coordinates.dat.data[i, :]
+            x, y = xy[j, :]
+            t = self.observation_time[j]
+            v = self.observation_values[j]
+            x_mesh, y_mesh = mesh0d.coordinates.dat.data[i, :]
 
-                msg = 'bad station location ' \
-                    f'{j} {i} {x} {x_mesh} {y} {y_mesh} {x-x_mesh} {y-y_mesh}'
-                assert numpy.allclose([x, y], [x_mesh, y_mesh]), msg
-                # create temporal interpolator
-                ip = interp1d(t, v, **interp_kw)
-                self.station_interpolators.append(ip)
+            msg = 'bad station location ' \
+                f'{j} {i} {x} {x_mesh} {y} {y_mesh} {x-x_mesh} {y-y_mesh}'
+            assert numpy.allclose([x, y], [x_mesh, y_mesh]), msg
+            # create temporal interpolator
+            ip = interp1d(t, v, **interp_kw)
+            self.station_interpolators.append(ip)
 
         # Process start and end times for observations
         self.obs_start_times = numpy.array([
@@ -549,7 +544,7 @@ class StationObservationManager:
         # compute square error
         self.obs_values_0d.assign(obs_func)
         self.mod_values_0d.interpolate(self.model_observation_field, ad_block_tag='observation')
-        s = self.cost_function_scaling_0d * self.indicator_0d * self.station_weight_0d
+        s = self.cost_function_scaling * self.indicator_0d * self.station_weight_0d
         self.J_misfit = fd.assemble(s * self.misfit_expr ** 2 * fd.dx, ad_block_tag='misfit_eval')
         return self.J_misfit
 
@@ -613,7 +608,7 @@ class RegularizationCalculator(abc.ABC):
         self.regularization_expr = 0
         self.mesh = function.function_space().mesh()
         # calculate mesh area (to scale the cost function)
-        self.mesh_area = fd.assemble(fd.Constant(1.0) * fd.dx(domain=self.mesh))
+        self.mesh_area = fd.assemble(fd.Constant(1.0, domain=self.mesh) * fd.dx)
         self.name = function.name()
 
     def eval_cost_function(self):
