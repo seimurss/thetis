@@ -1,7 +1,15 @@
 """
 Tidal Inlet
 =======================
-Simulates the tidal inlet test case from Warner et al. (2008).
+Simulates the tidal inlet test case from Warner et al. (2008) [https://doi.org/10.1016/j.cageo.2008.02.012].
+
+Description:
+    This example demonstrates the use of wave-current forcing for sediment transport module.
+    It tests the implmentation of Leo Van Rijn, 2007 [10.1061/(ASCE)0733-9429(2007)133:6(649)] 
+    bedload transport formulation for combined wave-current flows.
+    if the following option is set to True:
+        use_vanRijn_2007_bedload = True
+
 
 author: Seimur Shirinov
 date: June 2025
@@ -14,6 +22,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 import os, sys
 import xarray as xr
+from bathymetry_utils import generate_bathymetry
 
 # Setup zones
 sim_tz = timezone.pytz.utc
@@ -66,10 +75,19 @@ def interpolate_at_dt(wavefield, time_array, dt_seconds):
 
 # MESH
 # ---------------------------------------------
-# bathymetry data (.msh format):
-bathymetry_data='tidalInlet_bathymetry_data.msh'
-# mesh with physical groups:
-mesh2dfile='tidalinlet.msh'
+# # bathymetry data (.msh format):
+# bathymetry_data='tidalInlet_bathymetry_data.msh'
+# # mesh with physical groups:
+# mesh2dfile='tidalinlet.msh'
+
+# New fine resolution at the inlet walls:
+# New fine resolution at the inlet walls:
+bathymetry_data='/Users/sshirinov/cmcc/simulations/shyfem/cases/inlet/tidalinlet_v0/inlet_v0bathy.msh'
+# mesh2dfile='/Users/sshirinov/cmcc/shyfem/cases/inlet/tidalinlet_v0/inlet_v0.msh'
+# mesh2dfile='/Users/sshirinov/cmcc/shyfem/cases/inlet/tidalinlet_v1/inlet.msh'
+mesh2dfile='/Users/sshirinov/cmcc/simulations/shyfem/cases/inlet/tidalinlet_v1/inlet_v1_4.1.msh'
+
+
 mesh2d = Mesh(mesh2dfile)
 
 # define function spaces
@@ -98,10 +116,15 @@ distances, indices = tree.query(mesh2d.coordinates.dat.data, k=1)
 bathymetry_2d.dat.data[:] = points[indices, 2]
 
 
-
 # Wave Fields
 # ---------------------------------------------
-ww3waves = '/Users/sshirinov/mac/cmcc/shyfem/cases/inlet/tideinlet3/ww3waves.nc'
+# ww3waves = '/Users/sshirinov/mac/cmcc/shyfem/cases/inlet/tideinlet3/ww3waves.nc'
+# ww3waves = '/Users/sshirinov/Downloads/ww3inlet.nc'
+# ww3waves = './ww3inlet2.nc'
+# ww3waves = './ww3inlet5.nc' # uses the original spectral files 
+# ww3waves = './ww3inlet7.nc' # with harmonics
+# ww3waves = '/Users/sshirinov/cmcc/simulations/shyfem/cases/inlet/tidalinlet_v1/waves/ww3inlet7.nc' # with harmonics
+ww3waves = '/Users/sshirinov/cmcc/simulations/shyfem/cases/inlet/tidalinlet_v1/waves/ww3inlet8.nc' # with harmonics
 ds = xr.open_dataset(ww3waves)
 
 # Extract coordinates and variables
@@ -187,15 +210,19 @@ def update_wave_forcing(t_new,P1_2d,solver_obj):
 # TIMING
 # ---------------------------------------------
 # Simulation window:
-timestep = 60.    # -> time-stepping (if not adaptive)
-t_end = 3600 * 49 # -> total run time in sec.: 2 days + 1h 
-# t_export = 3600.0 # -> export interval in sec.
-t_export = 1800.0 # -> export interval in sec.
+timestep = 20    # -> time-stepping (if not adaptive)
+# timestep = 60.    # -> time-stepping (if not adaptive)
+t_end = 3600 * 50 # -> total run time in sec.: 2 days + 1h 
+t_export = 3600 # -> export interval in sec at teach hour.
+# t_export = 1800 # -> every 30min
+t_export = 900 # -> 15min
+t_export = 600 # -> 10min
+# t_export = 300 # -> 5min
 
 
 # set-up tides:
 # tidal_amplitude = 0.1
-tidal_amplitude = 1.0
+tidal_amplitude = 1.02
 tidal_period = 43200 # 12 hours
 
 # Copied from other test cases, perhaps not needed here
@@ -215,7 +242,20 @@ print(t_end)
 # Solver
 # ---------------------------------------------
 # outputdir = 'outputs_hydro'
-outputdir = 'outputs_sed'
+# outputdir = 'outputs_sed2'
+# outputdir = 'outputs_sed3'
+# outputdir = f'outputs_sed_{t_export}s_noRampup'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts20'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts20'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts{timestep}_NO_w-c_inter'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts{timestep}_NO_angleCorr'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts{timestep}_setvel011'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_tides_from_shyfem_ts{timestep}_NOws'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_ww3inlet6_ts{timestep}_NOws_hdiff0.005'
+# outputdir = f'outputs_sed_{t_export}s_noRampup4_ww3inlet6_ts{timestep}_NOws_smag'
+# outputdir = 'outputs_sed_900s_rampup'
+outputdir = f'outputs_sed_{t_export}s_inlet8'
 
 temp_const = 18.0
 salt_ocean = 35.0
@@ -234,7 +274,9 @@ options.simulation_export_time = t_export
 options.simulation_end_time = t_end
 # options.cfl_2d = Constant(0.8)
 options.swe_timestepper_type = 'CrankNicolson' # stable
-# options.swe_timestepper_type = 'ForwardEuler' # -> unstable # BackwardEuler - stable
+# options.swe_timestepper_type = 'BackwardEuler' # 'ForwardEuler' # -> unstable # BackwardEuler - stable
+# options.swe_timestepper_type = 'SSPRK33'
+# options.swe_timestepper_type = 'DIRK22'
 options.check_volume_conservation_2d = True
 options.element_family = 'dg-dg' # the stable element family for this test case
 # options.element_family = 'rt-dg' # worked too
@@ -245,6 +287,13 @@ options.fields_to_export = ['uv_2d', 'elev_2d', 'bathymetry_2d','sediment_2d',
                             'wave_dir_2d'] # 
 options.timestep = timestep
 
+# options.swe_timestepper_options.use_automatic_timestep = True
+# options.set_timestepper_type('CrankNicolson', implicitness_theta=1.0)
+# Many schemes do not have automatic timestepping mech.
+if hasattr(options.swe_timestepper_options, 'use_automatic_timestep'):
+    options.swe_timestepper_options.use_automatic_timestep = True
+
+# options.swe_timestepper_options.use_semi_implicit_linearization = False # this is forbidden if automatic timestepper = True
 
 # Chose only one of the following friction formulations: 
 # ---------------------------------------------
@@ -260,16 +309,21 @@ options.timestep = timestep
 # Using quadratic drag coefficient:
 quadratic_drag = Function(P1_2d, name="Quadratic drag coefficient")
 quadratic_drag.assign(2.5e-03)
+# quadratic_drag.assign(3.5e-03)
 options.quadratic_drag_coefficient = quadratic_drag
 
 # horiz viscosity:
 options.horizontal_viscosity = Constant(0.002) 
+# options.use_smagorinsky_viscosity = False
+# options.horizontal_viscosity = Constant(0.005)  
+# options.horizontal_viscosity = Constant(0.003)  
 # Wave terms:
 options.wave_curr_inter = True
 
 
 # Sediments
 # -------------
+MORPHOFAC = 1.0
 # below two options activate wave forcing and the use of van Rijn intra-wave bedload transport formulation
 options.sediment_model_options.van_Rijn_bedload = True
 options.sediment_model_options.wave_forcing = True
@@ -278,42 +332,55 @@ options.sediment_model_options.use_bedload = True
 options.sediment_model_options.solve_exner = True
 options.sediment_model_options.use_angle_correction = True
 options.sediment_model_options.use_slope_mag_correction = True
-options.sediment_model_options.use_secondary_current = True
+options.sediment_model_options.use_secondary_current = False # if true will not use van_Rijn_bedload !
 # if solve_suspended_sediment is True then correction should be true and backwards
 options.sediment_model_options.use_advective_velocity_correction = True # if false leads to Nonetype * Function -> error
 options.sediment_model_options.morphological_viscosity = Constant(1e-6) 
 options.sediment_model_options.average_sediment_size = Constant(average_size)
+# options.sediment_model_options.bed_reference_height = Constant(average_size*2.5)
 options.sediment_model_options.bed_reference_height = Constant(0.03)
-options.sediment_model_options.morphological_acceleration_factor = Constant(1.0)
+options.sediment_model_options.morphological_acceleration_factor = Constant(MORPHOFAC)
 options.sediment_model_options.horizontal_diffusivity = Constant(0.002) #< - just like in shyfem
+# options.sediment_model_options.horizontal_diffusivity = Constant(0.003) 
 
+# options.sediment_model_options.sediment_timestepper_options.use_automatic_timestep = True
+# options.sediment_model_options.exner_timestepper_options.use_automatic_timestep = True
 
 # Tidal forcing
 # ---------------------------------------------
-# tidal_amplitude = 0.5  # meters
-tidal_amplitude = 1.0  # meters !! as in the paper !
+tidal_amplitude = 1.03  # meters !! as in the paper !
 tidal_period = 43200   # seconds (12 hours)
 phase_seconds = 10800  # seconds
 ramp_duration = phase_seconds
 ramp_duration = 4 * 3600 # delay in tidal evolution time
-# phase_radians = (2 * np.pi / tidal_period) * phase_seconds
+# ramp_duration = 1.0
 phase_radians = (2 * pi / tidal_period) * phase_seconds
 t = np.linspace(0, t_end, int(timestep))  # seconds
 tidal_elev = Constant(0.0)
 
+RAMPUP = False
 
 # Forcing fields at each time step
 # ---------------------------------------------
 def update_forcings(t_new,):
-    # print(f" updating forcing at t: {t_new}")
-    # no ramp-up:
-    # tidal_elev.assign(tidal_amplitude * sin((2 * pi / tidal_period) * (t_new + phase_seconds))) 
-    # with ramp-up:
-    tidal_elev.assign(tanh(t_new / ramp_duration) * sin(2*pi/tidal_period * (t_new + phase_seconds)) * tidal_amplitude)
+    
+    if RAMPUP:
+        # Ramp-up:
+        tidal_elev.assign(tanh(t_new / ramp_duration) * sin(2*pi/tidal_period * (t_new + phase_seconds)) * tidal_amplitude)
+    else:
+        # No ramp-up:
+        # omega = 2 * pi / tidal_period
+        # tidal_elev.assign(tidal_amplitude * cos(omega * t_new))  # peak at t=0
+        # tidal_elev.assign(tidal_amplitude * sin((2 * pi / tidal_period) * (t_new + phase_seconds))) 
+        # tidal_elev.assign(tidal_amplitude * sin(2 * pi * (t_new + phase_seconds) / tidal_period)) 
+        # offset = 1800 # to align with shyfem tidal signal output
+        offset = 1600
+        tidal_elev.assign(tidal_amplitude * sin(2 * pi * (t_new + phase_seconds + offset) / tidal_period)) 
 
+            # zval = zref+ampli*sin(2.d0*pi*(rit+phase)/period)
+        
     # update wave forcing:
-    update_wave_forcing(t_new,P1_2d,solver_obj)
-
+    update_wave_forcing(t_new, P1_2d, solver_obj)
 
 # Define the boundary conditions for the SWE
 # ---------------------------------------------
@@ -339,7 +406,10 @@ swe_bnd[openboundary] = {'flux': Constant(0.0), 'elev': tidal_elev}
 solver_obj.bnd_functions['shallow_water'] = swe_bnd
 
 elev_init = Function(P1_2d)
-elev_init.assign(0.0)
+if RAMPUP:
+    elev_init.assign(0.0)
+else:
+    elev_init.assign(tidal_amplitude)
 solver_obj.assign_initial_conditions(elev=elev_init, uv=as_vector((1e-5, 0.0)))
 solver_obj.iterate(update_forcings=update_forcings)
 

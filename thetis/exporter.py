@@ -3,13 +3,27 @@ Routines for handling file exports.
 """
 from .utility import *
 from firedrake.output.vtk_output import is_cg, VTKFile
+
+
+class Interpolator:
+    """Compatibility shim: replaces the old firedrake.Interpolator API.
+    Old usage:  op = Interpolator(expr, target);  op.interpolate()
+    New API:    assemble(Interpolate(expr, target.function_space()), tensor=target)
+    """
+    def __init__(self, expr, target):
+        self._expr = expr
+        self._target = target
+        self._op = Interpolate(expr, target.function_space())
+
+    def interpolate(self):
+        assemble(self._op, tensor=self._target)
 from collections import OrderedDict
 import itertools
 
 
 def is_2d(fs):
     """Tests wether a function space is 2D or 3D"""
-    return fs.mesh().geometric_dimension() == 2
+    return fs.mesh().geometric_dimension == 2
 
 
 @PETSc.Log.EventDecorator("thetis.get_visu_space")

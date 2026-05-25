@@ -106,7 +106,7 @@ class UTMCoordinateSystem(CoordinateSystem):
         dim = mesh2d.topological_dimension()
         if dim != 2:
             raise ValueError(f'Expected a mesh of dimension 2, not {dim}')
-        if mesh2d.geometric_dimension() != 2:
+        if mesh2d.geometric_dimension != 2:
             raise ValueError('Mesh must reside in 2-dimensional space')
         x = mesh2d.coordinates.dat.data_ro[:, 0]
         y = mesh2d.coordinates.dat.data_ro[:, 1]

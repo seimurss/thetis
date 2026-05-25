@@ -2,6 +2,19 @@
 Classes for computing diagnostics.
 """
 from .utility import *
+from firedrake.interpolation import Interpolator as _FDInterpolator
+
+
+class Interpolator:
+    """Compatibility shim: replaces the old firedrake.Interpolator API."""
+    def __init__(self, expr, target):
+        self._op = Interpolate(expr, target.function_space())
+        self._target = target
+
+    def interpolate(self):
+        assemble(self._op, tensor=self._target)
+
+
 from .configuration import *
 from abc import ABCMeta, abstractmethod
 from firedrake import project

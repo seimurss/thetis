@@ -184,7 +184,7 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
             v_family = h_family
         if v_degree is None:
             v_degree = h_degree
-        h_cell, v_cell = mesh.ufl_cell().sub_cells()
+        h_cell, v_cell = mesh.ufl_cell().sub_cells
         h_elt = FiniteElement(h_family, h_cell, h_degree, variant=variant)
         v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
         elt = TensorProductElement(h_elt, v_elt)
@@ -502,7 +502,7 @@ def extend_function_to_3d(func, mesh_extruded):
     function.
     """
     fs = func.function_space()
-    assert fs.mesh().geometric_dimension() == 2, 'Function must be in 2D space'
+    assert fs.mesh().geometric_dimension == 2, 'Function must be in 2D space'
     ufl_elem = fs.ufl_element()
     family = ufl_elem.family()
     degree = ufl_elem.degree()
